@@ -1,0 +1,76 @@
+{
+  "name": "Deliverable",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "file_type": {
+      "type": "string",
+      "enum": [
+        "text",
+        "markdown",
+        "code",
+        "csv",
+        "json"
+      ],
+      "default": "text"
+    },
+    "content": {
+      "type": "string"
+    },
+    "storage_url": {
+      "type": "string"
+    },
+    "size_bytes": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "task_id",
+    "name",
+    "file_type"
+  ],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}
