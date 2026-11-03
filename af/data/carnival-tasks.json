@@ -1,0 +1,49 @@
+{
+  "tasks": [
+    {
+      "id": "mw13ad6u3ktz6o",
+      "title": "Daily repo sync",
+      "goal": "Pull latest and report changes",
+      "status": "queued",
+      "autonomy_level": "full_auto",
+      "max_steps": 10,
+      "provider": "openrouter",
+      "time_budget_minutes": 30,
+      "emoji": "☀️",
+      "when": "7:00 AM daily",
+      "created_at": "2026-11-03T19:37:13.542Z",
+      "updated_at": "2026-11-03T19:37:13.542Z"
+    },
+    {
+      "id": "mw13ad6u9dlkcp",
+      "title": "Weekly dependency audit",
+      "goal": "Check for outdated or vulnerable deps",
+      "status": "queued",
+      "autonomy_level": "full_auto",
+      "max_steps": 10,
+      "provider": "openrouter",
+      "time_budget_minutes": 30,
+      "emoji": "📦",
+      "when": "Mondays 9:00 AM",
+      "created_at": "2026-11-03T19:37:13.542Z",
+      "updated_at": "2026-11-03T19:37:13.542Z"
+    },
+    {
+      "id": "mw13ad6uzpffoe",
+      "title": "Monthly knowledge cleanup",
+      "goal": "Archive stale notes and reindex",
+      "status": "paused",
+      "autonomy_level": "full_auto",
+      "max_steps": 10,
+      "provider": "openrouter",
+      "time_budget_minutes": 30,
+      "emoji": "🗂️",
+      "when": "1st of month",
+      "created_at": "2026-11-03T19:37:13.542Z",
+      "updated_at": "2026-11-03T19:37:13.542Z"
+    }
+  ],
+  "steps": [],
+  "messages": [],
+  "deliverables": []
+}

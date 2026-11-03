@@ -1,0 +1,33 @@
+# ============================================================================
+# AgentForge backend dependencies
+# Install with:  ./.venv/Scripts/python.exe -m pip install -r requirements.txt
+# (macOS/Linux: .venv/bin/pip install -r requirements.txt)
+# All versions are pinned with == to the tested set (Python 3.12).
+# ============================================================================
+
+# --- server ---------------------------------------------------------------
+fastapi==0.133.1
+starlette==1.9.0
+uvicorn==0.54.0
+
+# --- data -----------------------------------------------------------------
+aiosqlite==0.22.0
+
+# --- config / validation --------------------------------------------------
+pydantic==2.13.4
+pydantic-settings==2.13.0
+python-dotenv==1.2.2
+
+# --- providers ------------------------------------------------------------
+# OpenRouter calls go through httpx (AsyncClient).
+httpx==0.28.1
+# AWS Bedrock is OPTIONAL. boto3 is imported lazily inside
+# app/agent/providers/bedrock.py, so it is not required to run the API.
+# To enable Bedrock, uncomment the line below (or install the extra):
+# boto3==1.43.5
+# Install the optional extra directly with:
+#   pip install -r requirements.txt boto3
+
+# --- dev ------------------------------------------------------------------
+pytest==9.0.1
+pytest-asyncio==1.3.0

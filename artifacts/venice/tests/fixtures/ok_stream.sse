@@ -1,0 +1,13 @@
+event: response.output_text.delta
+data: {"sequence_number":1,"delta":"one "}
+
+event: response.output_text.delta
+data: {"sequence_number":2,"delta":"two "}
+
+event: response.output_text.delta
+data: {"sequence_number":3,"delta":"three "}
+
+event: response.output_text.delta
+data: {"sequence_number":4,"delta":"four"}
+
+data: [DONE]

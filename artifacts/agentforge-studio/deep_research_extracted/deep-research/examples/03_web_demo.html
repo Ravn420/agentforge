@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deep Research Demo</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.25);
+    }
+    body {
+      margin: 0;
+      padding: 32px 16px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .container {
+      width: 100%;
+      max-width: 760px;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 28px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      margin-bottom: 24px;
+    }
+    .input-row {
+      display: flex;
+      gap: 12px;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.6);
+      color: var(--text);
+      font-size: 15px;
+      outline: none;
+    }
+    input[type="text"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+    button {
+      padding: 12px 24px;
+      border-radius: 10px;
+      border: none;
+      background: var(--accent);
+      color: #0f172a;
+      font-weight: 600;
+      font-size: 15px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .progress-box {
+      display: none;
+      margin-top: 20px;
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+    }
+    .step-log {
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--muted);
+      background: #090d16;
+      padding: 12px;
+      border-radius: 8px;
+      margin-top: 10px;
+    }
+    .result-view {
+      display: none;
+      margin-top: 24px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      line-height: 1.7;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔬 Deep Research Engine</h1>
+    <div class="card">
+      <div class="input-row">
+        <input type="text" id="queryInput" placeholder="Enter research query (e.g. Next-gen solid state batteries)..." value="Next-generation solid-state battery commercialization timeline 2025-2030">
+        <button id="startBtn" onclick="runResearch()">Start Research</button>
+      </div>
+
+      <div class="progress-box" id="progressBox">
+        <div style="font-weight: 600; color: var(--accent);" id="statusLabel">Initializing research...</div>
+        <div class="step-log" id="stepLog"></div>
+      </div>
+    </div>
+
+    <div class="result-view" id="resultView">
+      <h2 id="resultTitle">Report</h2>
+      <div id="reportBody"></div>
+    </div>
+  </div>
+
+  <script>
+    async function runResearch() {
+      const q = document.getElementById('queryInput').value.trim();
+      if (!q) return;
+
+      const btn = document.getElementById('startBtn');
+      const box = document.getElementById('progressBox');
+      const log = document.getElementById('stepLog');
+      const statusLabel = document.getElementById('statusLabel');
+      const resultView = document.getElementById('resultView');
+
+      btn.disabled = true;
+      box.style.display = 'block';
+      log.innerHTML = '';
+      statusLabel.textContent = 'Submitting research job...';
+      resultView.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/research/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q, max_time: 180 })
+        });
+        const data = await res.json();
+        const sessionId = data.session_id || data.id;
+
+        statusLabel.textContent = 'Running research (connecting to SSE stream)...';
+        
+        // Listen to live Server-Sent Events
+        const evtSource = new EventSource(`/api/research/stream/${sessionId}`);
+        
+        evtSource.onmessage = (e) => {
+          try {
+            const ev = JSON.parse(e.data);
+            const line = document.createElement('div');
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${ev.message || ev.stage || 'Update'}`;
+            log.appendChild(line);
+            log.scrollTop = log.scrollHeight;
+
+            if (ev.stage === 'done' || ev.status === 'done') {
+              evtSource.close();
+              statusLabel.textContent = 'Research Complete!';
+              fetchResult(sessionId);
+            }
+          } catch (err) {
+            console.error(err);
+          }
+        };
+
+        evtSource.onerror = () => {
+          evtSource.close();
+          statusLabel.textContent = 'Connection closed. Fetching results...';
+          fetchResult(sessionId);
+        };
+      } catch (err) {
+        statusLabel.textContent = 'Error starting research: ' + err.message;
+        btn.disabled = false;
+      }
+    }
+
+    async function fetchResult(id) {
+      try {
+        const res = await fetch(`/api/research/result/${id}`);
+        const data = await res.json();
+        const resultView = document.getElementById('resultView');
+        const reportBody = document.getElementById('reportBody');
+        resultView.style.display = 'block';
+        reportBody.innerHTML = `<pre style="white-space: pre-wrap; font-family: inherit;">${data.result || data.summary || JSON.stringify(data, null, 2)}</pre>`;
+      } catch (err) {
+        console.error(err);
+      } finally {
+        document.getElementById('startBtn').disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>

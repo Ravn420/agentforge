@@ -1,0 +1,6 @@
+{
+  "name": "AgentForge - Autonomous Agent & Deep Research Studio",
+  "description": "AgentForge mobile & desktop agent workspace featuring Deep Research with parallel runs, CrewAI-style multi-agent missions, brainstorm roundtables, and 50+ app connectors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

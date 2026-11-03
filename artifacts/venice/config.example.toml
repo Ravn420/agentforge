@@ -1,0 +1,29 @@
+# Copy to ~/.config/venice-lane/config.toml and fill in.
+# One egress is one daily Venice free quota. Endless use needs many.
+# Deploy a fleet with workers/deploy.sh, then list the URLs here.
+bearer = "change-me"
+model = "deepseek-v4-1-flash-free"
+port = 8000
+lane_order = ["cf", "account", "proxy", "browser", "foreign"]
+cf_workers = [
+  # "https://venice-lane-0.<account>.workers.dev/v1/chat/completions",
+  # "https://venice-lane-1.<account>.workers.dev/v1/chat/completions",
+]
+proxies = []
+browser_enabled = false
+browser_hold_reserve = true
+# foreign_base_url = "https://openrouter.ai/api/v1"
+# foreign_api_key = ""
+# foreign_model = "deepseek/deepseek-chat"
+cache_ttl_s = 86400
+semantic_threshold = 0.97
+semantic_min_chars = 40
+jitter_ms = [200, 800]
+max_tries = 4
+per_ip_pace_s = 2.0
+ttfb_timeout_s = 12.0
+max_concurrency = 8
+breaker_cooldown_s = 30
+quarantine_s = 600
+max_strikes = 3
+browser_idle_timeout_s = 60
