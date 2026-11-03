@@ -1,0 +1,14 @@
+{
+  "background_color": "#ffffff",
+  "dir": "ltr",
+  "display": "fullscreen",
+  "name": "Agent Forge",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "Agforge",
+  "start_url": "/",
+  "theme_color": "#ffffff",
+  "id": "Afforded v.1",
+  "description": "AgentForge is a mobile &amp; desktop autonomous agent workspace featuring parallel Deep Research, CrewAI-style multi-agent missions, brainstorm roundtables, and 50+ app connectors. Manage AI model API keys and GitHub Copilot OAuth seamlessly.",
+  "lang": "en"
+}

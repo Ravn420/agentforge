@@ -1,0 +1,71 @@
+{
+  "name": "ProviderSettings",
+  "type": "object",
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": [
+        "bedrock",
+        "openrouter"
+      ],
+      "default": "openrouter"
+    },
+    "aws_region": {
+      "type": "string",
+      "default": "us-east-1"
+    },
+    "openrouter_default_model": {
+      "type": "string",
+      "default": "anthropic/claude-sonnet-4.5"
+    },
+    "bedrock_default_model": {
+      "type": "string",
+      "default": "anthropic.claude-sonnet-4-5"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "provider"
+  ],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

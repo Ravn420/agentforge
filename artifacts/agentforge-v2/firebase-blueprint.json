@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "project": {
+      "title": "Project",
+      "description": "A user's project",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "ownerId": { "type": "string" }
+      },
+      "required": ["id", "name", "ownerId"]
+    },
+    "task": {
+      "title": "Task",
+      "description": "A task within a project",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "projectId": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "progress": { "type": "number" },
+        "ownerId": { "type": "string" }
+      },
+      "required": ["id", "projectId", "title", "status", "progress", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/projects/{projectId}": {
+      "schema": { "$ref": "project" },
+      "description": "Projects collection"
+    },
+    "/projects/{projectId}/tasks/{taskId}": {
+      "schema": { "$ref": "task" },
+      "description": "Tasks subcollection"
+    }
+  }
+}

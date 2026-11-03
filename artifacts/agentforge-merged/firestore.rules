@@ -1,0 +1,74 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isEmailVerified() { return request.auth.token.email_verified == true; }
+    function isOwner(data) { return isSignedIn() && data.ownerId == request.auth.uid; }
+
+    // --- Validation Blueprints ---
+    function isValidProject(data) {
+      return data.keys().hasAll(['id', 'name', 'ownerId']) &&
+             data.keys().hasOnly(['id', 'name', 'ownerId']) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 200 &&
+             data.ownerId == request.auth.uid;
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['id', 'projectId', 'title', 'status', 'progress', 'ownerId']) &&
+             data.keys().hasOnly(['id', 'projectId', 'title', 'status', 'progress', 'ownerId']) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.projectId is string && data.projectId.size() <= 128 &&
+             data.title is string && data.title.size() <= 200 &&
+             data.status is string && data.status.size() <= 500 &&
+             data.progress is number && data.progress >= 0 && data.progress <= 100 &&
+             data.ownerId == request.auth.uid;
+    }
+
+    // --- Collections ---
+
+    match /projects/{projectId} {
+      // Rule 3: Path Variable Hardening
+      allow get, delete: if isSignedIn() && isValidId(projectId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      
+      allow create: if isSignedIn() && isEmailVerified() && isValidId(projectId) && isValidProject(incoming());
+      
+      allow update: if isSignedIn() && isEmailVerified() && isValidId(projectId) && 
+                      isValidProject(incoming()) && isOwner(existing()) &&
+                      incoming().ownerId == existing().ownerId &&
+                      incoming().id == existing().id;
+
+      match /tasks/{taskId} {
+        // Rule 1: Master Gate (Relational Sync)
+        function projectExists() {
+          return exists(/databases/$(database)/documents/projects/$(projectId));
+        }
+        function isProjectOwner() {
+          return get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid;
+        }
+
+        allow get, delete: if isSignedIn() && isValidId(taskId) && isOwner(existing());
+        allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+        
+        allow create: if isSignedIn() && isEmailVerified() && isValidId(taskId) && 
+                        isValidTask(incoming()) && projectExists() && isProjectOwner();
+        
+        allow update: if isSignedIn() && isEmailVerified() && isValidId(taskId) && 
+                        isValidTask(incoming()) && isOwner(existing()) &&
+                        incoming().ownerId == existing().ownerId &&
+                        incoming().id == existing().id &&
+                        incoming().projectId == existing().projectId;
+      }
+    }
+  }
+}

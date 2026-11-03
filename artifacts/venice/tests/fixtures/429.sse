@@ -1,0 +1,4 @@
+event: response.output_text.delta
+data: {"sequence_number":1,"delta":"rate limited"}
+
+data: [DONE]

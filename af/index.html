@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>AgentForge - Autonomous Agent & Deep Research Studio</title>
+    <meta name="description" content="AgentForge mobile & desktop agent workspace featuring Deep Research with parallel runs, CrewAI-style multi-agent missions, brainstorm roundtables, and 50+ app connectors." />
+    <meta property="og:title" content="AgentForge - Autonomous Agent & Deep Research Studio" />
+    <meta property="og:description" content="AgentForge mobile & desktop agent workspace featuring Deep Research with parallel runs, CrewAI-style multi-agent missions, brainstorm roundtables, and 50+ app connectors." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="AgentForge" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      // Gracefully neutralize HMR WebSocket in cloud container/iframe environment
+      (function() {
+        // 1. Intercept console.error to swallow Vite HMR connection warnings
+        var origConsoleError = console.error;
+        console.error = function() {
+          var msg = Array.prototype.slice.call(arguments).map(function(a) {
+            return (a && a.message) || String(a);
+          }).join(' ');
+          if (msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite-hmr') !== -1 || msg.indexOf('closed without opened') !== -1) {
+            return;
+          }
+          return origConsoleError.apply(console, arguments);
+        };
+
+        // 2. Mock WebSocket for vite-hmr to prevent "closed without opened" error
+        var NativeWebSocket = window.WebSocket;
+        if (NativeWebSocket) {
+          window.WebSocket = function(url, protocols) {
+            var isVite = (protocols === 'vite-hmr' || protocols === 'vite-ping' || (typeof url === 'string' && url.indexOf('token=') !== -1 && url.indexOf('vite') !== -1));
+            if (isVite) {
+              var listeners = {};
+              var fakeWs = {
+                binaryType: 'blob',
+                bufferedAmount: 0,
+                extensions: '',
+                protocol: protocols || '',
+                readyState: 1, // WebSocket.OPEN
+                url: url,
+                send: function() {},
+                close: function() {
+                  fakeWs.readyState = 3; // CLOSED
+                },
+                addEventListener: function(type, fn) {
+                  if (!listeners[type]) listeners[type] = [];
+                  listeners[type].push(fn);
+                  if (type === 'open') {
+                    setTimeout(function() {
+                      try { fn({ type: 'open', target: fakeWs }); } catch (err) {}
+                    }, 0);
+                  }
+                },
+                removeEventListener: function(type, fn) {
+                  if (listeners[type]) {
+                    listeners[type] = listeners[type].filter(function(cb) { return cb !== fn; });
+                  }
+                },
+                dispatchEvent: function() { return true; }
+              };
+              return fakeWs;
+            }
+            return new NativeWebSocket(url, protocols);
+          };
+          window.WebSocket.prototype = NativeWebSocket.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
+        }
+
+        // 3. Prevent unhandled rejections and errors from propagating
+        window.addEventListener('error', function(e) {
+          if (e && (e.message && (e.message.indexOf('WebSocket') !== -1 || e.message.indexOf('closed without opened') !== -1) || (e.filename && e.filename.indexOf('@vite/client') !== -1))) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return true;
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e && (e.reason ? (e.reason.message || String(e.reason)) : '');
+          if (reason && (reason.indexOf('WebSocket') !== -1 || reason.indexOf('closed without opened') !== -1)) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
