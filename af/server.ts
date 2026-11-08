@@ -5474,6 +5474,1217 @@ Java.perform(function () {
           break;
         }
 
+        case "secret-scanner": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "secret-scanner", status: "failed", output: { note: "Import an APK first. Nothing was scanned." } });
+            break;
+          }
+          const decodedDir = path.join(process.cwd(), "data", "apktool", apkStem(apk));
+          if (!fs.existsSync(decodedDir)) {
+            res.json({ success: true, tool: "secret-scanner", status: "not-run", output: { note: "Not run. Decode the APK with apktool first. Nothing was scanned." } });
+            break;
+          }
+          const findings: Array<{ file: string; line: number; kind: string; preview: string }> = [];
+          let filesScanned = 0;
+          const walk = (dir: string) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                walk(full);
+                continue;
+              }
+              if (!/\.(xml|smali|java|kt|properties|json|yml|yaml|txt|gradle|js|html|conf|cfg)$|strings/i.test(entry.name)) continue;
+              if (fs.statSync(full).size > 2 * 1024 * 1024) continue;
+              filesScanned++;
+              let text = "";
+              try { text = fs.readFileSync(full, "utf8"); } catch { continue; }
+              const lines = text.split("\n");
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const patterns: Array<[RegExp, string]> = [
+                  [/AKIA[0-9A-Z]{16}/, "aws_key"],
+                  [/AIza[0-9A-Za-z\-_]{35}/, "google_api_key"],
+                  [/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, "jwt"],
+                  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "private_key"],
+                  [/ghp_[A-Za-z0-9]{36}/, "github_token"],
+                  [/sk_live_[A-Za-z0-9]{16,}/, "stripe_key"],
+                ];
+                for (const [re, kind] of patterns) {
+                  const m = re.exec(line);
+                  if (m) {
+                    const val = m[0];
+                    findings.push({ file: path.relative(decodedDir, full), line: i + 1, kind, preview: val.slice(0, 6) + "…" + val.slice(-4) });
+                    break;
+                  }
+                }
+                const assign = /(?:api[_-]?key|secret|token|password|passwd|credential)["']?\s*[:=]\s*["']([A-Za-z0-9+/_\-]{20,})["']/i.exec(line);
+                if (assign) {
+                  const val = assign[1];
+                  findings.push({ file: path.relative(decodedDir, full), line: i + 1, kind: "assigned_secret", preview: val.slice(0, 4) + "…" + val.slice(-4) });
+                }
+                if (findings.length >= 50) break;
+              }
+              if (findings.length >= 50) return;
+            }
+          };
+          walk(decodedDir);
+          res.json({
+            success: true,
+            tool: "secret-scanner",
+            status: "completed",
+            output: {
+              filesScanned,
+              findings,
+              count: findings.length,
+              note: findings.length ? `${findings.length} potential secrets found in ${filesScanned} files. Review before trusting.` : `No hardcoded secrets found in ${filesScanned} files of the decoded tree.`,
+            },
+          });
+          break;
+        }
+
+        case "permission-analyzer": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "permission-analyzer", status: "failed", output: { note: "Import an APK first. Permissions were not read." } });
+            break;
+          }
+          const manifestPath = path.join(process.cwd(), "data", "apktool", apkStem(apk), "AndroidManifest.xml");
+          if (!fs.existsSync(manifestPath) || fs.statSync(manifestPath).size === 0) {
+            res.json({ success: true, tool: "permission-analyzer", status: "not-run", output: { note: "Not run. Decode the APK with apktool first. No manifest was read." } });
+            break;
+          }
+          const manifest = fs.readFileSync(manifestPath, "utf8");
+          const perms = Array.from(new Set(Array.from(manifest.matchAll(/<uses-permission[^>]*android:name="([^"]+)"/g)).map((m) => m[1])));
+          const dangerous = new Set([
+            "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "CAMERA", "RECORD_AUDIO",
+            "READ_CONTACTS", "WRITE_CONTACTS", "READ_SMS", "SEND_SMS", "RECEIVE_SMS", "READ_CALL_LOG", "WRITE_CALL_LOG",
+            "CALL_PHONE", "READ_PHONE_STATE", "READ_PHONE_NUMBERS", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE",
+            "POST_NOTIFICATIONS", "BODY_SENSORS", "ACTIVITY_RECOGNITION",
+          ]);
+          const signature = new Set(["INSTALL_PACKAGES", "ACCESS_IMS_CALL_SERVICE", "READ_PRIVILEGED_PHONE_STATE"]);
+          const groups: Record<string, string[]> = { dangerous: [], signature: [], normal: [] };
+          for (const p of perms) {
+            const short = p.split(".").pop() || p;
+            if (dangerous.has(short)) groups.dangerous.push(p);
+            else if (signature.has(short)) groups.signature.push(p);
+            else groups.normal.push(p);
+          }
+          res.json({
+            success: true,
+            tool: "permission-analyzer",
+            status: "completed",
+            output: {
+              permissions: perms,
+              groups,
+              count: perms.length,
+              note: `${perms.length} permissions declared: ${groups.dangerous.length} dangerous, ${groups.signature.length} signature-level, ${groups.normal.length} normal.`,
+            },
+          });
+          break;
+        }
+
+        case "rootbeer": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "rootbeer", status: "failed", output: { note: "Import an APK first. No detection sites were searched." } });
+            break;
+          }
+          const decodedDir = path.join(process.cwd(), "data", "apktool", apkStem(apk));
+          if (!fs.existsSync(decodedDir)) {
+            res.json({ success: true, tool: "rootbeer", status: "not-run", output: { note: "Not run. Decode the APK with apktool first. No detection sites were searched." } });
+            break;
+          }
+          const sites: Array<{ file: string; line: number; snippet: string }> = [];
+          let filesSearched = 0;
+          const indicators: Array<[RegExp, string]> = [
+            [/com\.scottyab\.rootbeer|Lcom\/scottyab\/rootbeer\//, "rootbeer library"],
+            [/\/system\/bin\/su|\/system\/xbin\/su|\/sbin\/su|\/su\b/i, "su binary path"],
+            [/which\s+su|superuser\.apk|Superuser/i, "superuser reference"],
+            [/test-keys/i, "test-keys check"],
+            [/isRooted|isRootedWithoutBusyBox|detectRootManagement|checkRootAccess|isDeviceRooted/i, "root detection call"],
+            [/RootBuzz|SuperSU|magisk/i, "root manager reference"],
+          ];
+          const walkCode = (dir: string) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                walkCode(full);
+                continue;
+              }
+              if (!/\.(smali|java|kt)$/.test(entry.name) || fs.statSync(full).size > 4 * 1024 * 1024) continue;
+              filesSearched++;
+              let text = "";
+              try { text = fs.readFileSync(full, "utf8"); } catch { continue; }
+              const lines = text.split("\n");
+              for (let i = 0; i < lines.length; i++) {
+                for (const [re, kind] of indicators) {
+                  if (re.test(lines[i])) {
+                    sites.push({ file: path.relative(decodedDir, full), line: i + 1, snippet: `${kind}: ${lines[i].trim().slice(0, 160)}` });
+                    break;
+                  }
+                }
+                if (sites.length >= 40) break;
+              }
+              if (sites.length >= 40) return;
+            }
+          };
+          walkCode(decodedDir);
+          res.json({
+            success: true,
+            tool: "rootbeer",
+            status: "completed",
+            output: {
+              filesSearched,
+              sites,
+              count: sites.length,
+              note: `${sites.length} root-detection call sites found in ${filesSearched} source files. This reports detection sites only; nothing was disabled.`,
+            },
+          });
+          break;
+        }
+
+        case "libchecker": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "libchecker", status: "failed", output: { note: "Import an APK first. Native libraries were not listed." } });
+            break;
+          }
+          try {
+            const zip = new AdmZip(apk);
+            const byAbi: Record<string, Array<{ lib: string; bytes: number }>> = {};
+            for (const entry of zip.getEntries()) {
+              const m = /^lib\/([^/]+)\/(.+\.so)$/i.exec(entry.entryName);
+              if (!m) continue;
+              const abi = m[1];
+              const lib = m[2];
+              byAbi[abi] = byAbi[abi] || [];
+              byAbi[abi].push({ lib, bytes: entry.header.size });
+            }
+            const abis = Object.keys(byAbi).sort();
+            const total = abis.reduce((n, a) => n + byAbi[a].length, 0);
+            res.json({
+              success: true,
+              tool: "libchecker",
+              status: "completed",
+              output: {
+                abis,
+                byAbi,
+                totalLibs: total,
+                note: total ? `${total} native libraries across ${abis.length} ABI(s): ${abis.join(", ")}.` : "No native libraries (lib/*.so) in this APK. It is pure Java/Kotlin or DEX-only.",
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "libchecker", status: "failed", output: { note: `Could not read the APK as a zip: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "jni-analyzer": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "jni-analyzer", status: "failed", output: { note: "Import an APK first. JNI exports were not scanned." } });
+            break;
+          }
+          try {
+            const zip = new AdmZip(apk);
+            const results: Array<{ lib: string; abi: string; jniSymbols: string[] }> = [];
+            for (const entry of zip.getEntries()) {
+              const m = /^lib\/([^/]+)\/(.+\.so)$/i.exec(entry.entryName);
+              if (!m || entry.header.size > 64 * 1024 * 1024) continue;
+              const [, abi, lib] = m;
+              const data = entry.getData();
+              const symbols = new Set<string>();
+              const text = data.toString("latin1");
+              for (const match of text.matchAll(/Java_[A-Za-z0-9_]{2,}/g)) {
+                symbols.add(match[0]);
+                if (symbols.size >= 200) break;
+              }
+              results.push({ lib, abi, jniSymbols: Array.from(symbols).sort().slice(0, 200) });
+            }
+            const totalSymbols = results.reduce((n, r) => n + r.jniSymbols.length, 0);
+            res.json({
+              success: true,
+              tool: "jni-analyzer",
+              status: "completed",
+              output: {
+                libraries: results,
+                totalSymbols,
+                note: results.length ? `${totalSymbols} Java_* JNI exports across ${results.length} native librar(ies).` : "No native libraries in this APK, so no JNI exports exist.",
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "jni-analyzer", status: "failed", output: { note: `Could not scan native libraries: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "apk-explorer": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "apk-explorer", status: "failed", output: { note: "Import an APK first. Nothing was listed." } });
+            break;
+          }
+          try {
+            const zip = new AdmZip(apk);
+            const groups: Record<string, { count: number; bytes: number }> = {};
+            let totalEntries = 0;
+            for (const entry of zip.getEntries()) {
+              totalEntries++;
+              const top = entry.entryName.split("/")[0] + (entry.entryName.includes("/") ? "/" : "");
+              groups[top] = groups[top] || { count: 0, bytes: 0 };
+              groups[top].count++;
+              groups[top].bytes += entry.header.size;
+            }
+            res.json({
+              success: true,
+              tool: "apk-explorer",
+              status: "completed",
+              output: {
+                totalEntries,
+                groups,
+                note: `${totalEntries} entries across ${Object.keys(groups).length} top-level paths.`,
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "apk-explorer", status: "failed", output: { note: `Could not read the APK as a zip: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "room-inspector": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "room-inspector", status: "failed", output: { note: "Import an APK first. Room schemas were not inspected." } });
+            break;
+          }
+          const decodedDir = path.join(process.cwd(), "data", "apktool", apkStem(apk));
+          if (!fs.existsSync(decodedDir)) {
+            res.json({ success: true, tool: "room-inspector", status: "not-run", output: { note: "Not run. Decode the APK with apktool first." } });
+            break;
+          }
+          const rooms: Array<{ file: string; kind: string; detail: string }> = [];
+          const seen = new Set<string>();
+          const walkSources = (dir: string) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                walkSources(full);
+                continue;
+              }
+              if (!/\.(java|kt|smali)$/.test(entry.name) || fs.statSync(full).size > 4 * 1024 * 1024) continue;
+              let text = "";
+              try { text = fs.readFileSync(full, "utf8"); } catch { continue; }
+              const rel = path.relative(decodedDir, full);
+              const checks: Array<[RegExp, string]> = [
+                [/@Entity\s*(?:\(|\b)[^\n]*/g, "entity"],
+                [/@Database\s*(?:\(|\b)[^\n]*/g, "database"],
+                [/androidx\.room\.[A-Za-z]+/g, "room api usage"],
+                [/Landroidx\/room\/[A-Za-z/]+;/g, "room api usage (smali)"],
+              ];
+              for (const [re, kind] of checks) {
+                for (const m of text.matchAll(re)) {
+                  const detail = m[0].trim().slice(0, 160);
+                  const key = `${rel}|${kind}|${detail}`;
+                  if (seen.has(key)) continue;
+                  seen.add(key);
+                  rooms.push({ file: rel, kind, detail });
+                  if (rooms.length >= 30) return;
+                }
+              }
+            }
+          };
+          walkSources(decodedDir);
+          res.json({
+            success: true,
+            tool: "room-inspector",
+            status: "completed",
+            output: {
+              rooms: rooms.slice(0, 30),
+              count: rooms.length,
+              note: rooms.length ? `${rooms.length} Room entities/usage sites found in the decoded tree.` : "No Room database usage found in the decoded sources.",
+            },
+          });
+          break;
+        }
+
+        case "certificate-analyzer": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "certificate-analyzer", status: "failed", output: { note: "Import an APK first. Certificates were not read." } });
+            break;
+          }
+          const probed = await probeTool({ id: "certificate-analyzer", name: "keytool", group: "Sign", purpose: "", policy: "run", bins: ["keytool"] }, APKTOOL_JAR);
+          if (!probed.path) {
+            res.json({ success: true, tool: "certificate-analyzer", status: "missing", output: { note: "keytool is not available on this host. Certificates were not read." } });
+            break;
+          }
+          try {
+            const run = await execFileAsync(probed.path, ["-printcert", "-jarfile", apk], { timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+            const text = `${run.stdout}\n${run.stderr}`.trim();
+            const owner = /Owner:\s*(.+)/.exec(text)?.[1]?.trim();
+            const issuer = /Issuer:\s*(.+)/.exec(text)?.[1]?.trim();
+            const valid = /Valid from:[^\n]+/.exec(text)?.[0];
+            const sha256 = /SHA256:\s*([A-F0-9:]+)/i.exec(text)?.[1];
+            res.json({
+              success: true,
+              tool: "certificate-analyzer",
+              status: "completed",
+              output: { owner, issuer, valid, sha256, full: text.slice(0, 4000), note: "Read the signing certificate with keytool." },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "certificate-analyzer", status: "failed", output: { note: `keytool could not read the certificate: ${String(err.stderr || err.message).slice(0, 300)}` } });
+          }
+          break;
+        }
+
+        case "network":
+        case "network_inspector": {
+          const decodedDir = path.join(process.cwd(), "data", "apktool", apkStem(findWorkspaceApk(apkName) || ""));
+          const hasDecoded = fs.existsSync(decodedDir) && fs.readdirSync(decodedDir).length > 0;
+          if (hasDecoded) {
+            const endpoints = new Set<string>();
+            const hosts = new Set<string>();
+            const walkNet = (dir: string) => {
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                  walkNet(full);
+                  continue;
+                }
+                if (!/\.(xml|smali|java|kt|json|properties|txt)$/.test(entry.name) || fs.statSync(full).size > 2 * 1024 * 1024) continue;
+                let text = "";
+                try { text = fs.readFileSync(full, "utf8"); } catch { continue; }
+                for (const m of text.matchAll(/https?:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+/g)) {
+                  if (endpoints.size < 200) endpoints.add(m[0].replace(/[.,;)\]]+$/, ""));
+                }
+                for (const m of text.matchAll(/(?:Ljavax\/net\/|okhttp3|HttpURLConnection|URL\(")/g)) {
+                  hosts.add(m[0]);
+                }
+              }
+            };
+            walkNet(decodedDir);
+            const manifestPath = path.join(decodedDir, "AndroidManifest.xml");
+            const internetPerm = fs.existsSync(manifestPath) && /android\.permission\.INTERNET/.test(fs.readFileSync(manifestPath, "utf8"));
+            res.json({
+              success: true,
+              tool: "network_inspector",
+              status: "completed",
+              output: {
+                endpoints: Array.from(endpoints).slice(0, 200),
+                endpointCount: endpoints.size,
+                networkApis: Array.from(hosts),
+                internetPermission: internetPerm,
+                note: `Static analysis of the decoded tree: ${endpoints.size} unique http(s) endpoint(s). This is not a live capture.`,
+              },
+            });
+            break;
+          }
+          res.json({
+            success: true,
+            tool: "network_inspector",
+            status: "ready",
+            output: {
+              capturedFlows: [],
+              note: "No capture file is loaded. mitmproxy is installed but was not started.",
+            },
+          });
+          break;
+        }
+
+        case "fastboot": {
+          let stdout = "";
+          let ok = false;
+          try {
+            const run = await execFileAsync("fastboot", ["devices"], { timeout: 20000 });
+            stdout = `${run.stdout}\n${run.stderr}`.trim();
+            ok = true;
+          } catch (err: any) {
+            stdout = String(err.stdout || err.stderr || err.message || "");
+          }
+          const devices = stdout.split("\n").map((l) => l.trim()).filter((l) => l.includes("fastboot")).map((l) => ({ id: l.split(/\s+/)[0], raw: l }));
+          res.json({
+            success: ok,
+            tool: "fastboot",
+            command: "devices",
+            stdout,
+            devices,
+            note: devices.length ? `${devices.length} fastboot device(s) attached.` : ok ? "fastboot is available. No device in bootloader mode." : "fastboot is not available on this host.",
+          });
+          break;
+        }
+
+        case "elf-analyzer": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "elf-analyzer", status: "failed", output: { note: "Import an APK first. ELF headers were not read." } });
+            break;
+          }
+          const probed = await probeTool({ id: "elf-analyzer", name: "readelf", group: "Native", purpose: "", policy: "run", bins: ["readelf"] }, APKTOOL_JAR);
+          if (!probed.path) {
+            res.json({ success: true, tool: "elf-analyzer", status: "missing", output: { note: "readelf is not available on this host." } });
+            break;
+          }
+          try {
+            const zip = new AdmZip(apk);
+            const results: Array<{ lib: string; header: string }> = [];
+            for (const entry of zip.getEntries()) {
+              const m = /^lib\/([^/]+)\/(.+\.so)$/i.exec(entry.entryName);
+              if (!m) continue;
+              const tmp = path.join(process.cwd(), "data", "reforged_apks", `.elfscan-${Date.now()}-${path.basename(m[2])}`);
+              try {
+                fs.writeFileSync(tmp, entry.getData());
+                const run = await execFileAsync(probed.path, ["-h", tmp], { timeout: 20000 });
+                results.push({ lib: `${m[1]}/${m[2]}`, header: run.stdout.slice(0, 1200) });
+              } catch { /* skip unreadable lib */ }
+              finally { try { fs.unlinkSync(tmp); } catch { /* ignore */ } }
+              if (results.length >= 12) break;
+            }
+            res.json({
+              success: true,
+              tool: "elf-analyzer",
+              status: "completed",
+              output: {
+                libraries: results,
+                count: results.length,
+                note: results.length ? `ELF headers read for ${results.length} native librar(ies).` : "No native libraries in this APK.",
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "elf-analyzer", status: "failed", output: { note: `ELF analysis failed: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "arm64-disassembler": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "arm64-disassembler", status: "failed", output: { note: "Import an APK first. Nothing was disassembled." } });
+            break;
+          }
+          const probed = await probeTool({ id: "arm64-disassembler", name: "objdump", group: "Native", purpose: "", policy: "run", bins: ["llvm-objdump", "objdump"] }, APKTOOL_JAR);
+          if (!probed.path) {
+            res.json({ success: true, tool: "arm64-disassembler", status: "missing", output: { note: "llvm-objdump/objdump is not available on this host." } });
+            break;
+          }
+          try {
+            const zip = new AdmZip(apk);
+            const results: Array<{ lib: string; disassembly: string }> = [];
+            for (const entry of zip.getEntries()) {
+              if (!/^lib\/arm64-v8a\/.+\.so$/i.test(entry.entryName)) continue;
+              const tmp = path.join(process.cwd(), "data", "reforged_apks", `.arm64dis-${Date.now()}-${path.basename(entry.entryName)}`);
+              try {
+                fs.writeFileSync(tmp, entry.getData());
+                const run = await execFileAsync(probed.path, ["-d", tmp], { timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
+                results.push({ lib: entry.entryName, disassembly: run.stdout.split("\n").slice(0, 200).join("\n") });
+              } catch { /* skip unreadable lib */ }
+              finally { try { fs.unlinkSync(tmp); } catch { /* ignore */ } }
+              if (results.length >= 5) break;
+            }
+            res.json({
+              success: true,
+              tool: "arm64-disassembler",
+              status: "completed",
+              output: {
+                libraries: results,
+                note: results.length ? `Disassembled the first 200 lines of ${results.length} arm64-v8a librar(ies).` : "No arm64-v8a native libraries in this APK.",
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "arm64-disassembler", status: "failed", output: { note: `Disassembly failed: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "sqlite-browser": {
+          const dbPathOpt = options.dbPath ? String(options.dbPath) : "";
+          if (!dbPathOpt) {
+            res.json({ success: false, tool: "sqlite-browser", status: "failed", output: { note: "Pass options.dbPath (a database file under the workspace data folder) to open it." } });
+            break;
+          }
+          const dataDir = path.resolve(process.cwd(), "data");
+          const file = path.resolve(dataDir, dbPathOpt);
+          if (!file.startsWith(dataDir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+            res.json({ success: false, tool: "sqlite-browser", status: "failed", output: { note: "Database file must already exist under the workspace data folder." } });
+            break;
+          }
+          const probed = await probeTool({ id: "sqlite-browser", name: "sqlite3", group: "Runtime", purpose: "", policy: "run", bins: ["sqlite3"] }, APKTOOL_JAR);
+          if (!probed.path) {
+            res.json({ success: true, tool: "sqlite-browser", status: "missing", output: { note: "sqlite3 is not available on this host." } });
+            break;
+          }
+          try {
+            const run = await execFileAsync(probed.path, [file, ".tables"], { timeout: 20000 });
+            const tables = run.stdout.trim().split(/\s+/).filter(Boolean);
+            let queryResult: string | undefined;
+            const userQuery = options.query ? String(options.query).trim() : "";
+            if (userQuery) {
+              if (!/^(select|pragma)\b/i.test(userQuery) || /;/.test(userQuery.slice(0, -1))) {
+                res.json({ success: false, tool: "sqlite-browser", status: "failed", tables, output: { note: "Only a single SELECT or PRAGMA statement is allowed." } });
+                break;
+              }
+              const q = await execFileAsync(probed.path, [file, userQuery], { timeout: 20000 });
+              queryResult = q.stdout;
+            }
+            res.json({
+              success: true,
+              tool: "sqlite-browser",
+              status: "completed",
+              output: {
+                dbPath: path.relative(dataDir, file),
+                tables,
+                queryResult,
+                note: `Opened the database with sqlite3. ${tables.length} table(s).${queryResult ? " Query result included." : ""}`,
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "sqlite-browser", status: "failed", output: { note: `sqlite3 failed: ${String(err.message).slice(0, 300)}` } });
+          }
+          break;
+        }
+
+
+        case "openjdk": {
+          try {
+            const run = await execFileAsync("java", ["-version"], { timeout: 20000 });
+            const text = `${run.stdout}\n${run.stderr}`.trim();
+            const m = /version "([^"]+)"/.exec(text);
+            res.json({
+              success: true,
+              tool: "openjdk",
+              status: "completed",
+              output: {
+                version: m ? m[1] : "unknown",
+                raw: text.slice(0, 800),
+                note: `OpenJDK detected on this host${m ? ` (version ${m[1]})` : ""}.`,
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: true, tool: "openjdk", status: "missing", output: { note: "Java (OpenJDK) is not available on this host. No version could be read." } });
+          }
+          break;
+        }
+
+        case "android-sdk": {
+          try {
+            const buildToolsRoot = path.join(__dirname, "tools", "build-tools");
+            const platformsRoot = path.join(__dirname, "tools", "platforms");
+            if (!fs.existsSync(BUILD_TOOLS)) {
+              res.json({ success: true, tool: "android-sdk", status: "missing", output: { note: "Android SDK build-tools android-16 is not installed in this workspace." } });
+              break;
+            }
+            const buildTools = fs.existsSync(buildToolsRoot) ? fs.readdirSync(buildToolsRoot).filter((d) => fs.statSync(path.join(buildToolsRoot, d)).isDirectory()) : [];
+            const platforms = fs.existsSync(platformsRoot) ? fs.readdirSync(platformsRoot).filter((d) => fs.statSync(path.join(platformsRoot, d)).isDirectory()) : [];
+            res.json({
+              success: true,
+              tool: "android-sdk",
+              status: "completed",
+              output: {
+                buildTools,
+                platforms,
+                path: BUILD_TOOLS,
+                note: `Android SDK build-tools found${buildTools.length ? ` (${buildTools.join(", ")})` : ""}${platforms.length ? ` with ${platforms.length} platform(s)` : ""}.`,
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "android-sdk", status: "failed", output: { note: `Android SDK inspection failed: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "android-studio": {
+          const isWin = process.platform === "win32";
+          let studioPath: string | null = null;
+          try {
+            const run = await execFileAsync(isWin ? "where" : "which", [isWin ? "studio64" : "studio"], { timeout: 10000 });
+            const first = `${run.stdout}`.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+            if (first) studioPath = first;
+          } catch { /* not on PATH */ }
+          if (!studioPath) {
+            res.json({ success: true, tool: "android-studio", status: "missing", output: { note: "Android Studio CLI is not on PATH." } });
+            break;
+          }
+          res.json({
+            success: true,
+            tool: "android-studio",
+            status: "completed",
+            output: {
+              path: studioPath,
+              note: `Android Studio launcher found at ${studioPath}.`,
+            },
+          });
+          break;
+        }
+
+        case "aapt2": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "aapt2", status: "failed", output: { note: "Import an APK first. aapt2 badging was not run." } });
+            break;
+          }
+          const aapt2 = path.join(BUILD_TOOLS, "aapt2.exe");
+          if (!fs.existsSync(aapt2)) {
+            res.json({ success: true, tool: "aapt2", status: "missing", output: { note: "aapt2 is not available in the installed build-tools." } });
+            break;
+          }
+          try {
+            const run = await execFileAsync(aapt2, ["dump", "badging", apk], { timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
+            res.json({
+              success: true,
+              tool: "aapt2",
+              status: "completed",
+              output: {
+                badging: run.stdout.slice(0, 8000),
+                note: "aapt2 badging output.",
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "aapt2", status: "failed", output: { note: `aapt2 failed: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "gradle": {
+          try {
+            const run = await execFileAsync("gradle", ["--version"], { timeout: 30000 });
+            const text = `${run.stdout}\n${run.stderr}`.trim();
+            const m = /Gradle ([^\s]+)/.exec(text);
+            res.json({
+              success: true,
+              tool: "gradle",
+              status: "completed",
+              output: {
+                version: m ? m[1] : "unknown",
+                raw: text.slice(0, 1200),
+                note: `Gradle is available on this host${m ? ` (version ${m[1]})` : ""}.`,
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: true, tool: "gradle", status: "missing", output: { note: "Gradle is not installed on this host. No build could be configured." } });
+          }
+          break;
+        }
+
+        case "kotlin": {
+          try {
+            const run = await execFileAsync("kotlinc", ["-version"], { timeout: 30000 });
+            const text = `${run.stdout}\n${run.stderr}`.trim();
+            const m = /kotlinc-jvm (\S+)/.exec(text) || /version (\S+)/.exec(text);
+            res.json({
+              success: true,
+              tool: "kotlin",
+              status: "completed",
+              output: {
+                version: m ? m[1] : "unknown",
+                raw: text.slice(0, 800),
+                note: `Kotlin compiler is available on this host${m ? ` (version ${m[1]})` : ""}.`,
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: true, tool: "kotlin", status: "missing", output: { note: "kotlinc is not installed on this host. Kotlin sources were not inspected." } });
+          }
+          break;
+        }
+
+        case "compose": {
+          try {
+            const toolsRoot = path.join(__dirname, "tools");
+            const hits: Array<{ file: string; size: number }> = [];
+            if (fs.existsSync(toolsRoot)) {
+              for (const name of fs.readdirSync(toolsRoot)) {
+                const full = path.join(toolsRoot, name);
+                if (/compose.*compiler.*\.jar$/i.test(name) && fs.statSync(full).isFile()) {
+                  hits.push({ file: full, size: fs.statSync(full).size });
+                }
+              }
+            }
+            if (!hits.length) {
+              res.json({ success: true, tool: "compose", status: "missing", output: { note: "Compose compiler plugin jar is not installed in this workspace." } });
+              break;
+            }
+            res.json({
+              success: true,
+              tool: "compose",
+              status: "completed",
+              output: {
+                found: hits,
+                note: `Compose compiler jar found: ${hits[0].file} (${hits[0].size} bytes).`,
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "compose", status: "failed", output: { note: `Compose check failed: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "bundletool": {
+          try {
+            const toolsRoot = path.join(__dirname, "tools");
+            let jarPath: string | null = null;
+            if (fs.existsSync(toolsRoot)) {
+              const candidate = fs.readdirSync(toolsRoot).find((n) => /bundletool.*\.jar$/i.test(n));
+              if (candidate) jarPath = path.join(toolsRoot, candidate);
+            }
+            if (!jarPath) {
+              res.json({ success: true, tool: "bundletool", status: "missing", output: { note: "bundletool.jar is not installed in this workspace." } });
+              break;
+            }
+            const apk = findWorkspaceApk(apkName);
+            res.json({
+              success: true,
+              tool: "bundletool",
+              status: "completed",
+              output: {
+                jar: jarPath,
+                apk: apk || null,
+                note: `bundletool is available at ${jarPath}. It operates on Android App Bundles (.aab); the imported ${apk ? `"${apkStem(apk)}"` : "file"} is an APK${apk ? "" : " (none requested)"}.`,
+              },
+            });
+          } catch (err: any) {
+            res.json({ success: false, tool: "bundletool", status: "failed", output: { note: `bundletool check failed: ${err.message}` } });
+          }
+          break;
+        }
+
+        case "keytool": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "keytool", status: "failed", output: { note: "Import an APK first. Certificates were not read." } });
+            break;
+          }
+          try {
+            const run = await execFileAsync("keytool", ["-printcert", "-jarfile", apk], { timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
+            res.json({
+              success: true,
+              tool: "keytool",
+              status: "completed",
+              output: {
+                certificates: run.stdout.slice(0, 8000),
+                note: "Read the signer certificate.",
+              },
+            });
+          } catch (err: any) {
+            if (err.code === "ENOENT") {
+              res.json({ success: true, tool: "keytool", status: "missing", output: { note: "keytool is not available on this host. Certificates were not read." } });
+            } else {
+              res.json({ success: false, tool: "keytool", status: "failed", output: { note: `keytool failed: ${err.message}` } });
+            }
+          }
+          break;
+        }
+
+        case "jarsigner": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "jarsigner", status: "failed", output: { note: "Import an APK first. Signature verification was not run." } });
+            break;
+          }
+          try {
+            const run = await execFileAsync("jarsigner", ["-verify", "-verbose:summary", apk], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
+            const text = `${run.stdout}\n${run.stderr}`.trim();
+            const verified = /jar verified/i.test(text) || /jar is verified/i.test(text);
+            res.json({
+              success: true,
+              tool: "jarsigner",
+              status: "completed",
+              output: {
+                verified,
+                summary: text.slice(0, 8000),
+                note: verified ? "The APK signature was verified." : "Signature verification ran; the jar was not reported as verified.",
+              },
+            });
+          } catch (err: any) {
+            if (err.code === "ENOENT") {
+              res.json({ success: true, tool: "jarsigner", status: "missing", output: { note: "jarsigner is not available on this host. Signatures were not verified." } });
+            } else {
+              const text = `${err.stdout || ""}\n${err.stderr || ""}`.trim();
+              res.json({ success: false, tool: "jarsigner", status: "failed", output: { note: `jarsigner failed: ${text.slice(0, 800) || err.message}` } });
+            }
+          }
+          break;
+        }
+
+case "emulator": {
+  let emuPath = "";
+  let avds: string[] = [];
+  try {
+    const run = await execFileAsync("emulator", ["-list-avds"], { timeout: 15000 });
+    avds = run.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch (err: any) {
+    if (err && err.code === "ENOENT") {
+      res.json({ success: true, tool: "emulator", status: "missing", output: { note: "The Android emulator binary is not on PATH." } });
+      break;
+    }
+    // On Windows, fall back to `where emulator` to locate the binary before giving up.
+    try {
+      const where = await execFileAsync("where", ["emulator"], { timeout: 15000 });
+      emuPath = where.stdout.split("\r\n")[0].trim();
+      const run2 = await execFileAsync(emuPath, ["-list-avds"], { timeout: 15000 });
+      avds = run2.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    } catch (err2: any) {
+      if (err2 && err2.code === "ENOENT") {
+        res.json({ success: true, tool: "emulator", status: "missing", output: { note: "The Android emulator binary is not on PATH." } });
+        break;
+      }
+      avds = [];
+    }
+  }
+  res.json({
+    success: true,
+    tool: "emulator",
+    status: "completed",
+    output: {
+      avds,
+      avdCount: avds.length,
+      path: emuPath || "emulator",
+      note: "Emulator is installed. Reforge does not boot system images.",
+    },
+  });
+  break;
+}
+
+case "genymotion": {
+  let found = "";
+  for (const bin of ["gmtool", "genymotion"]) {
+    try {
+      const where = await execFileAsync(process.platform === "win32" ? "where" : "which", [bin], { timeout: 15000 });
+      found = where.stdout.split(/\r?\n/)[0].trim();
+      break;
+    } catch { /* try next bin */ }
+  }
+  res.json({
+    success: true,
+    tool: "genymotion",
+    status: "adapter",
+    output: {
+      path: found || null,
+      note: "Genymotion is registered. Install it on the host to run it from Reforge.",
+    },
+  });
+  break;
+}
+
+case "scrcpy": {
+  let version = "";
+  try {
+    const run = await execFileAsync("scrcpy", ["--version"], { timeout: 15000 });
+    version = `${run.stdout}\n${run.stderr}`.trim();
+  } catch (err: any) {
+    if (err && err.code === "ENOENT") {
+      res.json({ success: true, tool: "scrcpy", status: "missing", output: { note: "scrcpy is not installed on this host." } });
+      break;
+    }
+    version = String(err.stdout || err.stderr || err.message || "");
+  }
+  res.json({
+    success: true,
+    tool: "scrcpy",
+    status: "completed",
+    output: {
+      version: version.split("\n").slice(0, 6).join("\n"),
+      note: "scrcpy is available. Start mirroring from the device panel.",
+    },
+  });
+  break;
+}
+
+case "frida-server": {
+  let fridaVersion = "";
+  let serverPath = "";
+  try {
+    const v = await execFileAsync("frida", ["--version"], { timeout: 15000 });
+    fridaVersion = `${v.stdout}${v.stderr}`.trim();
+  } catch (err: any) {
+    if (err && err.code !== "ENOENT") fridaVersion = String(err.stdout || err.stderr || err.message || "").trim();
+  }
+  try {
+    const where = await execFileAsync(process.platform === "win32" ? "where" : "which", ["frida-server"], { timeout: 15000 });
+    serverPath = where.stdout.split(/\r?\n/)[0].trim();
+  } catch { /* frida-server binary not on PATH */ }
+  if (!fridaVersion && !serverPath) {
+    res.json({ success: true, tool: "frida-server", status: "missing", output: { note: "frida-server is not installed on this host." } });
+    break;
+  }
+  res.json({
+    success: true,
+    tool: "frida-server",
+    status: "completed",
+    output: {
+      fridaVersion: fridaVersion || null,
+      serverPath: serverPath || null,
+      note: "Push and run frida-server on the device manually; Reforge does not start it.",
+    },
+  });
+  break;
+}
+
+case "burp": {
+  let found = "";
+  for (const bin of ["burp", "burpsuite"]) {
+    try {
+      const where = await execFileAsync(process.platform === "win32" ? "where" : "which", [bin], { timeout: 15000 });
+      found = where.stdout.split(/\r?\n/)[0].trim();
+      break;
+    } catch { /* try next bin */ }
+  }
+  if (!found) {
+    res.json({
+      success: true,
+      tool: "burp",
+      status: "adapter",
+      output: { path: null, note: "Burp Suite is registered. No Professional key is loaded and the proxy is not started." },
+    });
+    break;
+  }
+  res.json({
+    success: true,
+    tool: "burp",
+    status: "adapter",
+    output: {
+      path: found,
+      note: "Burp Suite is installed on this host. The proxy is not started from here; launch it from the desktop.",
+    },
+  });
+  break;
+}
+
+case "charles": {
+  let found = "";
+  try {
+    const where = await execFileAsync(process.platform === "win32" ? "where" : "which", ["charles"], { timeout: 15000 });
+    found = where.stdout.split(/\r?\n/)[0].trim();
+  } catch { /* charles not on PATH */ }
+  res.json({
+    success: true,
+    tool: "charles",
+    status: "adapter",
+    output: {
+      path: found || null,
+      note: "Charles Proxy is registered. Install it on the host to run it from Reforge.",
+    },
+  });
+  break;
+}
+
+case "wireshark": {
+  let tsharkPath = "";
+  try {
+    const where = await execFileAsync(process.platform === "win32" ? "where" : "which", ["tshark"], { timeout: 15000 });
+    tsharkPath = where.stdout.split(/\r?\n/)[0].trim();
+  } catch {
+    try {
+      const where2 = await execFileAsync(process.platform === "win32" ? "where" : "which", ["wireshark"], { timeout: 15000 });
+      tsharkPath = where2.stdout.split(/\r?\n/)[0].trim();
+    } catch { /* neither binary on PATH */ }
+  }
+  if (!tsharkPath) {
+    res.json({ success: true, tool: "wireshark", status: "missing", output: { note: "tshark/Wireshark is not installed on this host. The desktop GUI is not opened." } });
+    break;
+  }
+  let interfaces: Array<{ id: string; name: string }> = [];
+  if (options && options.capture) {
+    try {
+      const run = await execFileAsync(tsharkPath, ["-D"], { timeout: 20000 });
+      interfaces = run.stdout.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+        const m = /^(\d+)\.\s+(.*)$/.exec(l);
+        return m ? { id: m[1], name: m[2] } : { id: "", name: l };
+      });
+    } catch (err: any) {
+      res.json({ success: false, tool: "wireshark", status: "failed", output: { note: `tshark -D failed: ${err.message}` } });
+      break;
+    }
+  }
+  res.json({
+    success: true,
+    tool: "wireshark",
+    status: "completed",
+    output: {
+      path: tsharkPath,
+      interfaces,
+      interfaceCount: interfaces.length,
+      note: options && options.capture
+        ? `tshark listed ${interfaces.length} capture interface(s). Captures run from the host, not Reforge.`
+        : "tshark is available. Set options.capture to list capture interfaces.",
+    },
+  });
+  break;
+}
+        case "python": {
+          try {
+            let run;
+            try {
+              run = await execFileAsync("python", ["--version"], { timeout: 15000 });
+            } catch (err: any) {
+              if (err.code === "ENOENT") {
+                res.json({ success: true, tool: "python", status: "missing", output: { note: "Python is not installed on this host." } });
+                break;
+              }
+              run = await execFileAsync("python3", ["--version"], { timeout: 15000 });
+            }
+            const version = `${run.stdout || run.stderr}`.trim();
+            res.json({ success: true, tool: "python", status: "completed", output: { version, note: `Python found: ${version}` } });
+          } catch (err: any) {
+            res.json({ success: true, tool: "python", status: "missing", output: { note: "Python is not available on this host." } });
+          }
+          break;
+        }
+
+        case "node": {
+          try {
+            const run = await execFileAsync("node", ["--version"], { timeout: 15000 });
+            const version = `${run.stdout}`.trim();
+            res.json({ success: true, tool: "node", status: "completed", output: { version, note: `Node.js found: ${version}` } });
+          } catch {
+            res.json({ success: true, tool: "node", status: "missing", output: { note: "Node.js is not installed on this host." } });
+          }
+          break;
+        }
+
+        case "git": {
+          try {
+            const run = await execFileAsync("git", ["--version"], { timeout: 15000 });
+            const version = `${run.stdout}`.trim();
+            res.json({ success: true, tool: "git", status: "completed", output: { version, note: `Git found: ${version}` } });
+          } catch {
+            res.json({ success: true, tool: "git", status: "missing", output: { note: "Git is not installed on this host." } });
+          }
+          break;
+        }
+
+        case "gh": {
+          try {
+            const run = await execFileAsync("gh", ["--version"], { timeout: 15000 });
+            const version = `${run.stdout}`.split("\n")[0].trim();
+            res.json({ success: true, tool: "gh", status: "completed", output: { version, note: `GitHub CLI found: ${version}` } });
+          } catch {
+            res.json({ success: true, tool: "gh", status: "missing", output: { note: "GitHub CLI (gh) is not installed on this host." } });
+          }
+          break;
+        }
+
+        case "docker": {
+          try {
+            const run = await execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"], { timeout: 20000 });
+            const serverVersion = `${run.stdout}`.trim();
+            res.json({ success: true, tool: "docker", status: "completed", output: { serverVersion, note: `Docker daemon reachable. Server version: ${serverVersion}` } });
+          } catch (err: any) {
+            const msg = `${err.stdout || ""}\n${err.stderr || ""}\n${err.message || ""}`.toLowerCase();
+            if (err.code === "ENOENT") {
+              res.json({ success: true, tool: "docker", status: "missing", output: { note: "Docker client is not installed." } });
+            } else if (msg.includes("error during connect") || msg.includes("cannot connect")) {
+              res.json({ success: true, tool: "docker", status: "adapter", output: { note: "Docker client is installed. The daemon is not started on this host." } });
+            } else {
+              res.json({ success: true, tool: "docker", status: "adapter", output: { note: `Docker probe failed: ${String(err.message || err).slice(0, 200)}` } });
+            }
+          }
+          break;
+        }
+
+        case "memory-profiler": {
+          res.json({ success: true, tool: "memory-profiler", status: "adapter", output: { note: "Memory Profiler ships inside Android Studio. No separate headless memory profiler is installed on this host." } });
+          break;
+        }
+
+        case "cpu-profiler": {
+          res.json({ success: true, tool: "cpu-profiler", status: "adapter", output: { note: "CPU Profiler ships inside Android Studio. No separate headless CPU profiler is installed on this host." } });
+          break;
+        }
+
+        case "layout-inspector": {
+          res.json({ success: true, tool: "layout-inspector", status: "adapter", output: { note: "Layout Inspector ships inside Android Studio. No separate headless layout inspector is installed on this host." } });
+          break;
+        }
+
+        case "smali-editor": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "smali-editor", status: "failed", output: { note: "Import an APK first. No smali files were touched." } });
+            break;
+          }
+          const decodedDir = path.join(process.cwd(), "data", "apktool", apkStem(apk));
+          if (!fs.existsSync(decodedDir)) {
+            res.json({ success: true, tool: "smali-editor", status: "not-run", output: { note: "Not run. Decode the APK with apktool first." } });
+            break;
+          }
+          const relFile = typeof options.file === "string" && options.file.trim() ? options.file.trim() : "";
+          if (relFile && typeof options.content === "string") {
+            const target = path.resolve(decodedDir, relFile);
+            if (!target.startsWith(decodedDir + path.sep) && target !== decodedDir) {
+              res.json({ success: false, tool: "smali-editor", status: "failed", output: { note: "Path escapes the decoded workspace." } });
+              break;
+            }
+            try {
+              fs.mkdirSync(path.dirname(target), { recursive: true });
+              fs.writeFileSync(target, options.content, "utf8");
+              res.json({ success: true, tool: "smali-editor", status: "completed", output: { file: relFile, bytes: options.content.length, note: "Smali file written. Rebuild with apktool to apply." } });
+            } catch (err: any) {
+              res.json({ success: false, tool: "smali-editor", status: "failed", output: { note: `Smali write failed: ${err.message}` } });
+            }
+            break;
+          }
+          if (relFile) {
+            const target = path.resolve(decodedDir, relFile);
+            if (!target.startsWith(decodedDir + path.sep) && target !== decodedDir) {
+              res.json({ success: false, tool: "smali-editor", status: "failed", output: { note: "Path escapes the decoded workspace." } });
+              break;
+            }
+            if (!fs.existsSync(target)) {
+              res.json({ success: true, tool: "smali-editor", status: "completed", output: { file: relFile, content: "", note: "Smali file contents. File does not exist yet." } });
+              break;
+            }
+            const content = fs.readFileSync(target, "utf8").slice(0, 20000);
+            res.json({ success: true, tool: "smali-editor", status: "completed", output: { file: relFile, content, note: "Smali file contents." } });
+            break;
+          }
+          const files: string[] = [];
+          const walkSmali = (dir: string) => {
+            if (files.length >= 200) return;
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) walkSmali(full);
+              else if (entry.name.endsWith(".smali")) files.push(path.relative(decodedDir, full));
+              if (files.length >= 200) return;
+            }
+          };
+          walkSmali(decodedDir);
+          res.json({ success: true, tool: "smali-editor", status: "completed", output: { files, count: files.length, note: "Pass options.file (and optional options.content) to view or edit a smali file." } });
+          break;
+        }
+
+        case "apklab": {
+          const apk = findWorkspaceApk(apkName);
+          if (!apk) {
+            res.json({ success: false, tool: "apklab", status: "failed", output: { note: "Import an APK first. No project layout was verified." } });
+            break;
+          }
+          const decodedDir = path.join(process.cwd(), "data", "apktool", apkStem(apk));
+          if (!fs.existsSync(decodedDir)) {
+            res.json({ success: true, tool: "apklab", status: "not-run", output: { note: "Not run. Decode the APK with apktool first to lay out an APKLab project." } });
+            break;
+          }
+          const exists = (p: string) => fs.existsSync(path.join(decodedDir, p));
+          const smaliDirs = fs.readdirSync(decodedDir, { withFileTypes: true }).filter((e) => e.isDirectory() && /^smali/.test(e.name)).map((e) => e.name);
+          res.json({
+            success: true,
+            tool: "apklab",
+            status: "completed",
+            output: {
+              apktoolYml: exists("apktool.yml"),
+              originalDir: exists("original"),
+              resDir: exists("res"),
+              smaliDirs,
+              assetsDir: exists("assets"),
+              libDir: exists("lib"),
+              note: "APKLab-style project layout verified for the decoded tree.",
+            },
+          });
+          break;
+        }
+
+        case "jeb": {
+          res.json({ success: true, tool: "jeb", status: "adapter", output: { note: "JEB is registered. It is commercial software and no license key is present on this host." } });
+          break;
+        }
         default: {
           const known = findTool(String(tool).replace(/_/g, "-")) || findTool(tool);
           if (!known) {
